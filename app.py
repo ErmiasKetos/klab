@@ -376,10 +376,7 @@ def render_monte_carlo(base_assumptions):
 # -------------------------------------------------------------------
 def main():
     st.title("KELAB Scalability & Profitability Modeling")
-    st.markdown("""
-    This app models lab performance from **April 2025** to **December 2027**. 
 
-    """)
     
     assumptions = input_assumptions()
     selected_scenarios = scenario_management(assumptions)
