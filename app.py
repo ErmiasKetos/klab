@@ -4,15 +4,14 @@ import numpy as np
 import plotly.express as px
 from datetime import datetime
 
-# Set full-window layout with an expanded sidebar
+# Use full window layout with expanded sidebar
 st.set_page_config(layout="wide", initial_sidebar_state="expanded")
 
-# Initialize session state for scenario management
 if 'scenarios' not in st.session_state:
     st.session_state.scenarios = {}
 
 # -------------------------------------------------------------------
-# Helper: Calculate Capacity
+# Helper Function: Calculate Monthly Capacity per Phase
 # -------------------------------------------------------------------
 def calculate_capacity(row, assumptions):
     base = assumptions['base_capacity']
@@ -24,36 +23,32 @@ def calculate_capacity(row, assumptions):
         return base * assumptions['phase3_staff'] * assumptions['shift_multiplier'] * (1 + assumptions['ai_efficiency'])
 
 # -------------------------------------------------------------------
-# Input Assumptions
+# Input Assumptions: Including Test Mix, Operational Inputs, Goal Type, and Phase Dates
 # -------------------------------------------------------------------
 def input_assumptions():
     with st.sidebar:
         st.header("Model Assumptions")
         # --- Analyst Work Parameters ---
-        weekly_hours = 40  # fixed: 40 hours per week
-        weeks_per_month = 4  # assume 4 weeks per month
+        weekly_hours = 40  # hours per week
+        weeks_per_month = 4  # weeks per month
         productivity = st.slider("Analyst Productivity Factor", 0.5, 1.0, 0.8)
         
         # --- Test Mix Assumptions ---
         st.subheader("Test Mix Assumptions")
-        basic_pct = st.number_input("Percentage of Basic Metals tests (%)", min_value=0, max_value=100, value=50)
-        anions_pct = st.number_input("Percentage of Anions tests (%)", min_value=0, max_value=100, value=30)
-        advanced_pct = st.number_input("Percentage of Advanced Metals tests (%)", min_value=0, max_value=100, value=20)
+        basic_pct = st.number_input("Percentage of Basic Metals tests (%)", 0, 100, value=50)
+        anions_pct = st.number_input("Percentage of Anions tests (%)", 0, 100, value=30)
+        advanced_pct = st.number_input("Percentage of Advanced Metals tests (%)", 0, 100, value=20)
         total_pct = basic_pct + anions_pct + advanced_pct
         if total_pct != 100:
             st.warning(f"Test mix percentages sum to {total_pct}%. They should total 100%.")
-        
-        # Calculate weighted average test time (hours per sample)
+        # Weighted average test time (in hours per sample)
         weighted_test_time = (basic_pct/100.0)*1 + (anions_pct/100.0)*0.5 + (advanced_pct/100.0)*1.5
-        
-        # Compute available productive hours per month
         available_hours = weekly_hours * weeks_per_month * productivity
-        
-        # Automatically computed base capacity per analyst per month
         computed_base_capacity = available_hours / weighted_test_time
         st.markdown(f"**Computed Base Capacity/Analyst/Month:** {computed_base_capacity:.0f} samples")
         
         # --- Core Operational Inputs ---
+        st.subheader("Operational Inputs")
         assumptions = {
             'base_capacity': computed_base_capacity,
             'phase1_staff': st.number_input("Phase 1 Staff", 1, value=3),
@@ -89,32 +84,27 @@ def input_assumptions():
         return assumptions
 
 # -------------------------------------------------------------------
-# Timeline Generation
+# Timeline Generation: Calculate Monthly Metrics and Determine Goal Achievement
 # -------------------------------------------------------------------
 def generate_timeline(assumptions):
-    dates = pd.date_range(start=assumptions['phase1_start'],
-                          end=assumptions['phase3_end'],
-                          freq='MS')
+    dates = pd.date_range(start=assumptions['phase1_start'], end=assumptions['phase3_end'], freq='MS')
     timeline = pd.DataFrame(index=dates)
     timeline.index.name = 'Month'
     
-    # Assign phases
+    # Assign phases based on dates
     timeline['Phase'] = 'Phase 1'
     timeline.loc[timeline.index >= assumptions['phase2_start'], 'Phase'] = 'Phase 2'
     timeline.loc[timeline.index >= assumptions['phase3_start'], 'Phase'] = 'Phase 3'
     
-    # Calculate Monthly Capacity & Cumulative Samples
     timeline['Monthly Capacity'] = timeline.apply(lambda x: calculate_capacity(x, assumptions), axis=1)
     timeline['Cumulative Samples'] = timeline['Monthly Capacity'].cumsum()
     
-    # Staff Costs (based on phase-specific staffing)
+    # Calculate Costs
     timeline['Staff Costs'] = timeline['Phase'].map({
         'Phase 1': assumptions['phase1_staff'] * assumptions['salary'],
         'Phase 2': assumptions['phase2_staff'] * assumptions['salary'],
         'Phase 3': assumptions['phase3_staff'] * assumptions['salary']
     })
-    
-    # Overhead Costs (fixed monthly costs plus QA/QC percentage)
     equipment_lease = assumptions.get('equipment_lease', 10378)
     instrument_running = assumptions.get('instrument_running', 2775)
     software_licenses = assumptions.get('software_licenses', 2000)
@@ -122,17 +112,12 @@ def generate_timeline(assumptions):
     overhead_base = equipment_lease + instrument_running + software_licenses
     timeline['Overhead Costs'] = overhead_base + overhead_base * qaqc_rate
     
-    # Total Cost = Staff Costs + Overhead Costs
     timeline['Total Cost'] = timeline['Staff Costs'] + timeline['Overhead Costs']
-    
-    # Revenue = Monthly Capacity * Average Test Price
     avg_test_price = assumptions.get('avg_test_price', 300)
     timeline['Revenue'] = timeline['Monthly Capacity'] * avg_test_price
-    
-    # Profit = Revenue - Total Cost
     timeline['Profit'] = timeline['Revenue'] - timeline['Total Cost']
     
-    # Determine "Goal Met?" based on selected goal type
+    # Determine if the goal is met based on selected goal type
     if assumptions['goal_type'] == "Monthly Sample Goal":
         timeline['Goal Met?'] = timeline['Monthly Capacity'].apply(lambda x: "Goal Met" if x >= assumptions['goal_value'] else "Under Target")
     else:
@@ -141,16 +126,12 @@ def generate_timeline(assumptions):
     return timeline
 
 # -------------------------------------------------------------------
-# Render Base Visualizations (Original Graphics)
+# Render Base Visualizations: Capacity, Revenue, Profit, Data Table
 # -------------------------------------------------------------------
 def render_base_visualizations(timeline):
     st.subheader("Monthly Capacity")
     fig_cap = px.line(timeline.reset_index(), x='Month', y='Monthly Capacity', title="Monthly Capacity Over Time")
-    # Add horizontal line at the user-specified goal if sample goal is selected
-    if timeline['Goal Met?'].str.contains("Goal Met").any():
-        # We assume the goal value is constant; here we use the value from the assumptions
-        st.session_state.goal_value = st.session_state.get('goal_value', 1000)
-        fig_cap.add_hline(y=st.session_state.goal_value, line_dash="dot", line_color="red")
+    # Add horizontal goal line if using sample goal
     st.plotly_chart(fig_cap, use_container_width=True)
     
     st.subheader("Monthly Revenue")
@@ -165,7 +146,7 @@ def render_base_visualizations(timeline):
     st.dataframe(timeline[["Phase", "Monthly Capacity", "Goal Met?", "Revenue", "Total Cost", "Profit"]])
 
 # -------------------------------------------------------------------
-# Scenario Management (save, load, delete)
+# Scenario Management: Save, Load, and Delete Scenarios
 # -------------------------------------------------------------------
 def scenario_management(assumptions):
     with st.sidebar:
@@ -186,12 +167,12 @@ def scenario_management(assumptions):
         return selected
 
 # -------------------------------------------------------------------
-# Render Scenario Comparison with Expanded KPIs
+# Render Scenario Comparison & Expanded KPIs Dashboard
 # -------------------------------------------------------------------
 def render_comparison(selected_scenarios):
     if len(selected_scenarios) < 1:
         return
-    
+
     all_data = []
     metrics = []
     for name in selected_scenarios:
@@ -241,7 +222,7 @@ def render_comparison(selected_scenarios):
     df_combined = pd.concat(all_data)
     
     st.subheader("Scenario Comparison Chart")
-    # Use the goal type from the first selected scenario for the horizontal line
+    # Use the goal type from the first selected scenario to add horizontal line
     first_scenario = st.session_state.scenarios[selected_scenarios[0]]
     goal_value = first_scenario.get('goal_value', 1000)
     if first_scenario['goal_type'] == "Monthly Sample Goal":
@@ -267,7 +248,7 @@ def render_comparison(selected_scenarios):
     st.markdown("""
     - **Peak Capacity (tests/month):** Maximum tests processed in any month.
     - **Goal Achieved Date:** First month when capacity or profit meets/exceeds the set goal.
-    - **Months to Reach Goal:** Months taken from start until the goal is achieved.
+    - **Months to Reach Goal:** Number of months from start until the goal is achieved.
     - **Total Revenue ($M):** Cumulative revenue over the period (in millions).
     - **Total Cost ($M):** Cumulative cost over the period (in millions).
     - **Total Profit ($M):** Revenue minus cost (in millions).
@@ -278,7 +259,7 @@ def render_comparison(selected_scenarios):
     """)
 
 # -------------------------------------------------------------------
-# Monte Carlo Simulation
+# Monte Carlo Simulation & Interpretation
 # -------------------------------------------------------------------
 def run_monte_carlo_simulation(base_assumptions, n_simulations=500):
     results = []
@@ -329,7 +310,7 @@ def render_monte_carlo(base_assumptions):
         with col3:
             fig3 = px.scatter(results, x='total_cost', y='peak_capacity', title="Cost vs Capacity Tradeoff")
             st.plotly_chart(fig3, use_container_width=True)
-        # Summary statistics
+        # Compute summary statistics for interpretation
         avg_peak = results['peak_capacity'].mean()
         median_peak = results['peak_capacity'].median()
         std_peak = results['peak_capacity'].std()
@@ -345,7 +326,7 @@ def render_monte_carlo(base_assumptions):
         st.markdown("### Monte Carlo Simulation Interpretation")
         st.markdown(
             f"**Peak Capacity Distribution:** The simulations show an average peak capacity of **{avg_peak:.1f} tests/month** "
-            f"(median: **{median_peak:.1f}**, std: **{std_peak:.1f}**). This reflects variability in operational performance."
+            f"(median: **{median_peak:.1f}**, std: **{std_peak:.1f}**), reflecting variability in operations."
         )
         if avg_time is not None:
             st.markdown(
@@ -355,10 +336,11 @@ def render_monte_carlo(base_assumptions):
         else:
             st.markdown("**Time to Reach Goal:** The goal was not reached in most simulations.")
         st.markdown(
-            "**Cost vs Capacity Tradeoff:** Higher capacities generally incur higher costs. This relationship is essential when scaling operations."
+            "**Cost vs Capacity Tradeoff:** Generally, higher capacity is associated with higher costs, a key tradeoff in scaling."
         )
         st.markdown(
-            f"**Probability of Achieving Goal:** There is a **{probability_goal:.1f}%** chance of meeting the goal ({base_assumptions['goal_type']} of {base_assumptions['goal_value']})."
+            f"**Probability of Achieving Goal:** There is a **{probability_goal:.1f}%** chance of meeting the goal "
+            f"({base_assumptions['goal_type']} of {base_assumptions['goal_value']})."
         )
 
 # -------------------------------------------------------------------
