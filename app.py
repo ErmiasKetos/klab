@@ -4,249 +4,273 @@ import numpy as np
 import plotly.express as px
 from datetime import datetime
 
-# Initialize session state for scenario management
-if 'scenarios' not in st.session_state:
-    st.session_state.scenarios = {}
+# -----------------------------------------------------------------------------
+# 1. SCENARIO DEFINITIONS
+#    Here we define multipliers for three scenarios: Conservative, Moderate, Optimistic.
+#    - staff_multiplier: scales the number of analysts
+#    - capacity_multiplier: scales capacity per analyst
+#    - price_multiplier: scales test pricing
+# -----------------------------------------------------------------------------
+SCENARIOS = {
+    "Conservative": {
+        "staff_multiplier": 0.8,
+        "capacity_multiplier": 0.9,
+        "price_multiplier": 0.9
+    },
+    "Moderate": {
+        "staff_multiplier": 1.0,
+        "capacity_multiplier": 1.0,
+        "price_multiplier": 1.0
+    },
+    "Optimistic": {
+        "staff_multiplier": 1.2,
+        "capacity_multiplier": 1.1,
+        "price_multiplier": 1.1
+    },
+}
 
-# --- Helper Functions ---
-def calculate_capacity(row, assumptions):
-    if row['Phase'] == 'Phase 1':
-        return assumptions['base_capacity'] * assumptions['phase1_staff']
-    elif row['Phase'] == 'Phase 2':
-        return (assumptions['base_capacity'] * assumptions['phase2_staff'] 
-                * assumptions['shift_multiplier'])
-    elif row['Phase'] == 'Phase 3':
-        return (assumptions['base_capacity'] * assumptions['phase3_staff']
-                * assumptions['shift_multiplier'] 
-                * (1 + assumptions['ai_efficiency']))
+# -----------------------------------------------------------------------------
+# 2. HELPER FUNCTIONS
+# -----------------------------------------------------------------------------
+def phase_label(date):
+    """Return the phase label based on date."""
+    # Phase 1: Apr 2025 - Dec 2025
+    # Phase 2: Jan 2026 - Dec 2026
+    # Phase 3: Jan 2027 - Dec 2027
+    if date.year == 2025 and date.month >= 4:
+        return "Phase 1"
+    elif date.year == 2026:
+        return "Phase 2"
+    else:
+        return "Phase 3"
 
-# --- Model Logic ---
-def generate_timeline(assumptions):
-    dates = pd.date_range(
-        start=assumptions['phase1_start'],
-        end=assumptions['phase3_end'],
-        freq='MS'
+def generate_timeline(assumptions, scenario_name="Moderate"):
+    """
+    Create a monthly timeline from Apr 2025 to Dec 2027.
+    Calculate capacity, revenue, costs, and profit for each month.
+    """
+    scenario = SCENARIOS[scenario_name]
+    
+    # Generate monthly dates
+    dates = pd.date_range(start="2025-04-01", end="2027-12-31", freq="MS")
+    timeline = pd.DataFrame(index=dates)
+    timeline.index.name = "Month"
+    
+    # Determine Phase
+    timeline["Phase"] = timeline.index.map(phase_label)
+    
+    # Calculate capacity
+    #   capacity_per_analyst * number_of_analysts
+    #   multiplied by scenario capacity factor
+    capacity_per_analyst = assumptions["base_capacity"] * scenario["capacity_multiplier"]
+    
+    # For each Phase, we might have different staff levels
+    def staff_for_phase(phase):
+        if phase == "Phase 1":
+            return int(assumptions["phase1_staff"] * scenario["staff_multiplier"])
+        elif phase == "Phase 2":
+            return int(assumptions["phase2_staff"] * scenario["staff_multiplier"])
+        else:  # Phase 3
+            return int(assumptions["phase3_staff"] * scenario["staff_multiplier"])
+    
+    timeline["Staff"] = timeline["Phase"].apply(staff_for_phase)
+    timeline["Monthly Capacity"] = timeline["Staff"] * capacity_per_analyst
+    
+    # Goal Tracking
+    timeline["Goal Met?"] = timeline["Monthly Capacity"].apply(
+        lambda x: "Goal Met" if x >= 1000 else "Under Target"
     )
     
-    timeline = pd.DataFrame(index=dates)
-    timeline.index.name = 'Month'
-    
-    # Assign Phases
-    timeline['Phase'] = 'Phase 1'
-    timeline.loc[timeline.index >= assumptions['phase2_start'], 'Phase'] = 'Phase 2'
-    timeline.loc[timeline.index >= assumptions['phase3_start'], 'Phase'] = 'Phase 3'
-    
-    # Calculate Metrics
-    timeline['Monthly Capacity'] = timeline.apply(
-        lambda x: calculate_capacity(x, assumptions), axis=1)
-    timeline['Cumulative Samples'] = timeline['Monthly Capacity'].cumsum()
+    # Calculate Revenue
+    # Weighted test price * monthly capacity
+    # We'll apply a scenario multiplier on top of the base price.
+    base_price = assumptions["avg_test_price"]  # e.g. $300
+    scenario_price = base_price * scenario["price_multiplier"]
+    timeline["Revenue"] = timeline["Monthly Capacity"] * scenario_price
     
     # Calculate Costs
-    timeline['Staff Costs'] = timeline['Phase'].map({
-        'Phase 1': assumptions['phase1_staff'] * assumptions['salary'],
-        'Phase 2': assumptions['phase2_staff'] * assumptions['salary'],
-        'Phase 3': assumptions['phase3_staff'] * assumptions['salary']
-    })
+    # Summation of fixed monthly costs + labor costs + QA/QC
+    # You can expand or modify the logic to incorporate more detail.
     
-    timeline['AI Costs'] = (timeline['Phase'] == 'Phase 3') * assumptions['ai_cost']
+    # Fixed costs (from your slides)
+    # - Equipment Lease
+    # - Instrument Running
+    # - Labor
+    # - Software/Licenses
+    # - QA/QC is 8% of operational budget (example assumption)
+    timeline["Equipment Lease"] = assumptions["equip_lease"]
+    timeline["Instrument Running"] = assumptions["instrument_run"]
+    
+    # Labor cost scales with the number of staff
+    # e.g., assumptions["base_labor"] is the cost for the nominal staff count
+    # We scale it by the ratio of actual staff to the "base staff" used in the assumption
+    base_staff_count = assumptions["phase1_staff"]  # Just an anchor
+    timeline["Labor"] = assumptions["base_labor"] * (timeline["Staff"] / base_staff_count)
+    
+    timeline["Software/Licenses"] = assumptions["software"]
+    
+    # Sum up
+    timeline["Total Operational"] = (
+        timeline["Equipment Lease"] +
+        timeline["Instrument Running"] +
+        timeline["Labor"] +
+        timeline["Software/Licenses"]
+    )
+    # QA/QC cost (example: 8% of operational budget)
+    timeline["QA/QC"] = timeline["Total Operational"] * assumptions["qaqc_rate"]
+    
+    timeline["Total Cost"] = timeline["Total Operational"] + timeline["QA/QC"]
+    # Profit
+    timeline["Profit"] = timeline["Revenue"] - timeline["Total Cost"]
     
     return timeline
 
-# --- UI Components ---
-def input_assumptions():
-    with st.sidebar:
-        st.header("Model Assumptions")
-        
-        assumptions = {
-            'base_capacity': st.number_input("Base Capacity/Analyst/Month", 100),
-            'phase1_staff': st.number_input("Phase 1 Staff", 1),
-            'phase2_staff': st.number_input("Phase 2 Staff", 1),
-            'phase3_staff': st.number_input("Phase 3 Staff", 1),
-            'shift_multiplier': st.slider("Shift Multiplier (Phase 2+)", 1.0, 3.0, 2.0),
-            'ai_efficiency': st.slider("AI Efficiency Boost", 0.0, 1.0, 0.3),
-            'salary': st.number_input("Monthly Salary/Analyst ($)", 5000),
-            'ai_cost': st.number_input("AI Setup Cost ($)", 50000)
-        }
-        
-        st.subheader("Phase Dates")
-        assumptions['phase1_start'] = pd.to_datetime(st.date_input("Phase 1 Start", datetime(2025,1,1)))
-        assumptions['phase2_start'] = pd.to_datetime(st.date_input("Phase 2 Start", datetime(2026,1,1)))
-        assumptions['phase3_start'] = pd.to_datetime(st.date_input("Phase 3 Start", datetime(2027,1,1)))
-        assumptions['phase3_end'] = pd.to_datetime(st.date_input("Model End Date", datetime(2027,12,31)))
-        
-        return assumptions
-
-def scenario_management(assumptions):
-    with st.sidebar:
-        st.subheader("Scenario Management")
-        
-        # Save/Load Interface
-        scenario_name = st.text_input("Scenario Name")
-        col1, col2 = st.columns(2)
-        with col1:
-            if st.button("💾 Save Current Settings"):
-                if scenario_name:
-                    save_scenario(assumptions.copy(), scenario_name)
-        
-        # Scenario Selection
-        selected = st.multiselect(
-            "Compare Scenarios",
-            options=list(st.session_state.scenarios.keys()),
-            default=list(st.session_state.scenarios.keys())[-1] if st.session_state.scenarios else []
-        )
-        
-        # Delete Scenarios
-        with col2:
-            if st.button("🗑️ Delete Selected"):
-                for name in selected:
-                    delete_scenario(name)
-        
-        return selected
-
-def save_scenario(assumptions, name):
-    st.session_state.scenarios[name] = assumptions
-    st.success(f"Scenario '{name}' saved!")
-
-def delete_scenario(name):
-    del st.session_state.scenarios[name]
-
-def render_comparison(selected_scenarios):
-    if len(selected_scenarios) < 1:
-        return
+def render_base_visualizations(df, scenario_name):
+    """Render line charts for Capacity, Revenue, and Profit."""
+    st.subheader(f"Key Metrics - {scenario_name} Scenario")
     
-    # Generate timelines for all selected scenarios
-    all_data = []
-    for name in selected_scenarios:
-        timeline = generate_timeline(st.session_state.scenarios[name])
-        timeline['Scenario'] = name
-        all_data.append(timeline)
-    
-    combined = pd.concat(all_data)
-    
-    # Comparison Chart
-    st.subheader("Scenario Comparison")
-    fig = px.line(combined.reset_index(), x='Month', y='Monthly Capacity',
-                 color='Scenario', line_dash='Scenario',
-                 title="Capacity Across Scenarios")
-    fig.add_hline(y=1000, line_dash="dot", line_color="red")
-    st.plotly_chart(fig, use_container_width=True)
-    
-    # Metrics Table
-    metrics = []
-    for name in selected_scenarios:
-        tl = generate_timeline(st.session_state.scenarios[name])
-        metrics.append({
-            'Scenario': name,
-            'Peak Capacity': tl['Monthly Capacity'].max(),
-            'Total Cost ($M)': (tl['Staff Costs'].sum() + tl['AI Costs'].sum()) / 1e6,
-            'Goal Achieved Date': tl[tl['Monthly Capacity'] >= 1000].index[0] if any(tl['Monthly Capacity'] >= 1000) else "Not Reached"
-        })
-    
-    st.dataframe(pd.DataFrame(metrics), use_container_width=True)
-
-def run_monte_carlo(base_assumptions, n_simulations=500):
-    results = []
-    progress_bar = st.progress(0)
-    
-    # Define distributions for key variables
-    for i in range(n_simulations):
-        # Perturb assumptions
-        perturbed = base_assumptions.copy()
-        perturbed['base_capacity'] = np.random.normal(
-            base_assumptions['base_capacity'],
-            base_assumptions['base_capacity'] * 0.1  # ±10% variability
-        )
-        perturbed['ai_efficiency'] = np.random.triangular(
-            left=0.1, mode=base_assumptions['ai_efficiency'], right=0.5
-        )
-        perturbed['phase2_staff'] = int(np.random.choice(
-            [base_assumptions['phase2_staff']-1, 
-             base_assumptions['phase2_staff'], 
-             base_assumptions['phase2_staff']+1]
-        ))
-        
-        # Run simulation
-        timeline = generate_timeline(perturbed)
-        goal_met = timeline[timeline['Monthly Capacity'] >= 1000]
-        
-        results.append({
-            'peak_capacity': timeline['Monthly Capacity'].max(),
-            'months_to_goal': (goal_met.index[0] - timeline.index[0]).days // 30 if len(goal_met) > 0 else None,
-            'total_cost': (timeline['Staff Costs'].sum() + timeline['AI Costs'].sum()) / 1e6
-        })
-        progress_bar.progress((i+1)/n_simulations)
-    
-    return pd.DataFrame(results)
-
-def render_monte_carlo(base_assumptions):
-    st.subheader("Risk Analysis (Monte Carlo Simulation)")
-    
-    with st.expander("⚙️ Simulation Settings"):
-        n_simulations = st.number_input("Number of Simulations", 100, 5000, 500)
-        run_sim = st.button("Run Simulation")
-    
-    if run_sim:
-        with st.spinner(f"Running {n_simulations} simulations..."):
-            results = run_monte_carlo(base_assumptions, n_simulations)
-        
-        # Show distributions
-        col1, col2, col3 = st.columns(3)
-        
-        with col1:
-            fig1 = px.histogram(results, x='peak_capacity', 
-                               title="Peak Capacity Distribution")
-            st.plotly_chart(fig1, use_container_width=True)
-        
-        with col2:
-            fig2 = px.histogram(results[~results['months_to_goal'].isna()], 
-                               x='months_to_goal',
-                               title="Time to Reach Goal (Months)")
-            st.plotly_chart(fig2, use_container_width=True)
-        
-        with col3:
-            fig3 = px.scatter(results, x='total_cost', y='peak_capacity',
-                            title="Cost vs Capacity Tradeoff")
-            st.plotly_chart(fig3, use_container_width=True)
-        
-        # Risk Metrics
-        success_rate = (1 - results['months_to_goal'].isna().mean()) * 100
-        st.metric("Probability of Achieving Goal", f"{success_rate:.1f}%")
-
-def render_base_visualizations(timeline):
-    st.subheader("Timeline Visualization")
-    # Example: Plot monthly capacity over time
-    fig = px.line(
-        timeline.reset_index(),
+    # Capacity Chart
+    fig_cap = px.line(
+        df.reset_index(),
         x="Month",
         y="Monthly Capacity",
-        title="Monthly Capacity Over Time"
+        title="Monthly Capacity"
     )
-    st.plotly_chart(fig, use_container_width=True)
+    # Show 1,000-sample goal
+    fig_cap.add_hline(y=1000, line_dash="dot", line_color="red")
+    st.plotly_chart(fig_cap, use_container_width=True)
     
-    # Optionally, display the data table
-    st.dataframe(timeline)
+    # Revenue Chart
+    fig_rev = px.line(
+        df.reset_index(),
+        x="Month",
+        y="Revenue",
+        title="Monthly Revenue ($)"
+    )
+    st.plotly_chart(fig_rev, use_container_width=True)
+    
+    # Profit Chart
+    fig_profit = px.line(
+        df.reset_index(),
+        x="Month",
+        y="Profit",
+        title="Monthly Profit ($)"
+    )
+    st.plotly_chart(fig_profit, use_container_width=True)
+    
+    # Show table with "Goal Met?" for reference
+    st.dataframe(
+        df[["Phase", "Staff", "Monthly Capacity", "Goal Met?", "Revenue", "Total Cost", "Profit"]]
+    )
 
+def compare_scenarios(assumptions):
+    """Compare the three scenarios side-by-side."""
+    st.subheader("Scenario Comparison")
+    
+    combined = []
+    for scenario_name in SCENARIOS.keys():
+        timeline = generate_timeline(assumptions, scenario_name)
+        timeline["Scenario"] = scenario_name
+        combined.append(timeline)
+    
+    df_combined = pd.concat(combined)
+    
+    # Capacity Comparison
+    fig_cap = px.line(
+        df_combined.reset_index(),
+        x="Month",
+        y="Monthly Capacity",
+        color="Scenario",
+        title="Monthly Capacity Comparison"
+    )
+    fig_cap.add_hline(y=1000, line_dash="dot", line_color="red")
+    st.plotly_chart(fig_cap, use_container_width=True)
+    
+    # Profit Comparison
+    fig_profit = px.line(
+        df_combined.reset_index(),
+        x="Month",
+        y="Profit",
+        color="Scenario",
+        title="Monthly Profit Comparison"
+    )
+    st.plotly_chart(fig_profit, use_container_width=True)
+    
+    # Show final profit by scenario
+    summary = df_combined.groupby("Scenario").agg(
+        Total_Revenue=("Revenue", "sum"),
+        Total_Cost=("Total Cost", "sum"),
+        Total_Profit=("Profit", "sum"),
+        Peak_Capacity=("Monthly Capacity", "max")
+    )
+    st.dataframe(summary)
+
+# -----------------------------------------------------------------------------
+# 3. MAIN APP
+# -----------------------------------------------------------------------------
 def main():
+    st.title("Lab Scalability & Profit Modeling Tool")
+    st.markdown(
+        """
+        This tool models lab capacity, revenue, and profit from **April 2025** 
+        to **December 2027**, divided into three phases:
+        - **Phase 1:** Apr 2025 – Dec 2025  
+        - **Phase 2:** Jan 2026 – Dec 2026  
+        - **Phase 3:** Jan 2027 – Dec 2027  
 
-    st.title("Lab Scalability Modeling Tool")
+        It calculates monthly capacity based on the number of staff and per-analyst 
+        capacity, then derives revenue using a weighted test price. Fixed costs 
+        and QA/QC expenses are subtracted to obtain monthly profit. A 1,000 
+        samples/month goal is tracked automatically.
+        """
+    )
+
+    # --- Dynamic Input Controls ---
+    st.sidebar.header("Model Assumptions")
+    base_capacity = st.sidebar.number_input("Base Capacity (tests per analyst/month)", 100, 2000, 440)
     
-    # Get Inputs and Manage Scenarios
-    assumptions = input_assumptions()
-    selected_scenarios = scenario_management(assumptions)
+    # Staff in each phase
+    phase1_staff = st.sidebar.number_input("Staff - Phase 1 (2025)", 1, 10, 3)
+    phase2_staff = st.sidebar.number_input("Staff - Phase 2 (2026)", 1, 15, 5)
+    phase3_staff = st.sidebar.number_input("Staff - Phase 3 (2027+)", 1, 20, 5)
     
-    # Main Tabs
-    tab1, tab2, tab3 = st.tabs(["Current Scenario", "Scenario Comparison", "Risk Analysis"])
+    # Pricing
+    avg_test_price = st.sidebar.number_input("Average Test Price ($)", 50, 1000, 300)
+    
+    # Costs (monthly)
+    equip_lease = st.sidebar.number_input("Equipment Lease ($/month)", 0, 50000, 10378)
+    instrument_run = st.sidebar.number_input("Instrument Running ($/month)", 0, 10000, 2775)
+    base_labor = st.sidebar.number_input("Base Labor Cost ($/month)", 0, 50000, 16667)
+    software = st.sidebar.number_input("Software/Licenses ($/month)", 0, 20000, 2000)
+    qaqc_rate = st.sidebar.slider("QA/QC Rate (% of operational)", 0.0, 0.2, 0.08)
+    
+    # Package assumptions
+    assumptions = {
+        "base_capacity": base_capacity,
+        "phase1_staff": phase1_staff,
+        "phase2_staff": phase2_staff,
+        "phase3_staff": phase3_staff,
+        
+        "avg_test_price": avg_test_price,
+        
+        "equip_lease": equip_lease,
+        "instrument_run": instrument_run,
+        "base_labor": base_labor,
+        "software": software,
+        "qaqc_rate": qaqc_rate,
+    }
+
+    # --- Tabs ---
+    tab1, tab2 = st.tabs(["Single Scenario View", "Compare Scenarios"])
     
     with tab1:
-        # Original single-scenario view
-        timeline = generate_timeline(assumptions)
-        render_base_visualizations(timeline)
+        # Let user pick which scenario to view in single-scenario mode
+        scenario_choice = st.selectbox("Select Scenario", list(SCENARIOS.keys()))
+        timeline = generate_timeline(assumptions, scenario_choice)
+        render_base_visualizations(timeline, scenario_choice)
     
     with tab2:
-        render_comparison(selected_scenarios)
-    
-    with tab3:
-        render_monte_carlo(assumptions)
+        compare_scenarios(assumptions)
 
 if __name__ == "__main__":
     main()
