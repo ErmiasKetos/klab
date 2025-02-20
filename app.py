@@ -15,12 +15,18 @@ if 'scenarios' not in st.session_state:
 # -------------------------------------------------------------------
 def calculate_capacity(row, assumptions):
     base = assumptions['base_capacity']
+    # Calculate effective shift multiplier:
+    # If only one shift, all staff work; if more, only half the additional staff are available per extra shift.
+    effective_shift = 1 + (assumptions['shift_multiplier'] - 1) / 2
     if row['Phase'] == 'Phase 1':
+        # In Phase 1, assume one shift (all staff work full shift)
         return base * assumptions['phase1_staff']
     elif row['Phase'] == 'Phase 2':
-        return base * assumptions['phase2_staff'] * assumptions['shift_multiplier']
+        # In Phase 2, capacity is increased by operating additional shifts but with split staffing
+        return base * assumptions['phase2_staff'] * effective_shift
     else:  # Phase 3
-        return base * assumptions['phase3_staff'] * assumptions['shift_multiplier'] * (1 + assumptions['ai_efficiency'])
+        # In Phase 3, the lab also benefits from an AI efficiency boost
+        return base * assumptions['phase3_staff'] * effective_shift * (1 + assumptions['ai_efficiency'])
 
 # -------------------------------------------------------------------
 # Input Assumptions: Including Test Mix, Operational Inputs, Goal Type, and Phase Dates
