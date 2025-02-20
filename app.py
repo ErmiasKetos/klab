@@ -59,9 +59,9 @@ def input_assumptions():
         
         assumptions = {
             'base_capacity': st.number_input("Base Capacity/Analyst/Month", 100),
-            'phase1_staff': st.number_input("Phase 1 Staff", 3),
-            'phase2_staff': st.number_input("Phase 2 Staff", 5),
-            'phase3_staff': st.number_input("Phase 3 Staff", 5),
+            'phase1_staff': st.number_input("Phase 1 Staff", 1),
+            'phase2_staff': st.number_input("Phase 2 Staff", 1),
+            'phase3_staff': st.number_input("Phase 3 Staff", 1),
             'shift_multiplier': st.slider("Shift Multiplier (Phase 2+)", 1.0, 3.0, 2.0),
             'ai_efficiency': st.slider("AI Efficiency Boost", 0.0, 1.0, 0.3),
             'salary': st.number_input("Monthly Salary/Analyst ($)", 5000),
