@@ -212,7 +212,22 @@ def render_monte_carlo(base_assumptions):
         success_rate = (1 - results['months_to_goal'].isna().mean()) * 100
         st.metric("Probability of Achieving Goal", f"{success_rate:.1f}%")
 
+def render_base_visualizations(timeline):
+    st.subheader("Timeline Visualization")
+    # Example: Plot monthly capacity over time
+    fig = px.line(
+        timeline.reset_index(),
+        x="Month",
+        y="Monthly Capacity",
+        title="Monthly Capacity Over Time"
+    )
+    st.plotly_chart(fig, use_container_width=True)
+    
+    # Optionally, display the data table
+    st.dataframe(timeline)
+
 def main():
+
     st.title("Lab Scalability Modeling Tool")
     
     # Get Inputs and Manage Scenarios
