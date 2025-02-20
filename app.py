@@ -47,7 +47,7 @@ def generate_timeline(assumptions):
         'Phase 3': assumptions['phase3_staff'] * assumptions['salary']
     })
     
-    # Overhead Costs with default values if missing
+    # Overhead Costs with defaults if necessary
     equipment_lease = assumptions.get('equipment_lease', 10378)
     instrument_running = assumptions.get('instrument_running', 2775)
     software_licenses = assumptions.get('software_licenses', 2000)
@@ -60,12 +60,14 @@ def generate_timeline(assumptions):
     timeline['Total Cost'] = timeline['Staff Costs'] + timeline['Overhead Costs']
     
     # Revenue & Profit
-    timeline['Revenue'] = timeline['Monthly Capacity'] * assumptions['avg_test_price']
+    avg_test_price = assumptions.get('avg_test_price', 300)
+    timeline['Revenue'] = timeline['Monthly Capacity'] * avg_test_price
     timeline['Profit'] = timeline['Revenue'] - timeline['Total Cost']
     
-    # Goal Tracking
+    # Goal Tracking using the user-specified goal:
+    goal = assumptions.get('samples_goal', 1000)
     timeline['Goal Met?'] = timeline['Monthly Capacity'].apply(
-        lambda x: "Goal Met" if x >= 1000 else "Under Target"
+        lambda x: "Goal Met" if x >= goal else "Under Target"
     )
     
     return timeline
@@ -82,23 +84,24 @@ def input_assumptions():
             'phase3_staff': st.number_input("Phase 3 Staff", 1, value=5),
             'shift_multiplier': st.slider("Shift Multiplier (Phase 2+)", 1.0, 3.0, 2.0),
             'ai_efficiency': st.slider("AI Efficiency Boost (Phase 3)", 0.0, 1.0, 0.3),
-            
             'salary': st.number_input("Monthly Salary/Analyst ($)", 1000, value=5000),
             'equipment_lease': st.number_input("Equipment Lease ($/month)", 0, value=10378),
             'instrument_running': st.number_input("Instrument Running ($/month)", 0, value=2775),
             'software_licenses': st.number_input("Software/Licenses ($/month)", 0, value=2000),
             'qaqc_rate': st.slider("QA/QC Rate (% of overhead)", 0.0, 0.2, 0.08),
             'avg_test_price': st.number_input("Average Test Price ($/sample)", 1, value=300),
+            # New input for sample/month goal:
+            'samples_goal': st.number_input("Monthly Sample Goal", 100, 10000, value=1000)
         }
         
         st.subheader("Phase Dates")
-        # Convert date_input() (Python date) -> pandas Timestamp
         assumptions['phase1_start'] = pd.to_datetime(st.date_input("Phase 1 Start", datetime(2025,4,1)))
         assumptions['phase2_start'] = pd.to_datetime(st.date_input("Phase 2 Start", datetime(2026,1,1)))
         assumptions['phase3_start'] = pd.to_datetime(st.date_input("Phase 3 Start", datetime(2027,1,1)))
         assumptions['phase3_end']   = pd.to_datetime(st.date_input("Model End Date", datetime(2027,12,31)))
         
         return assumptions
+
 
 def scenario_management(assumptions):
     """Save/load scenarios from session state."""
@@ -227,21 +230,16 @@ def render_comparison(selected_scenarios):
 # MONTE CARLO SIMULATION
 # -----------------------------------------------------------------------------
 def run_monte_carlo(base_assumptions, n_simulations=500):
-    """
-    Runs Monte Carlo by perturbing certain assumptions (base capacity, AI efficiency,
-    staff in Phase 2, etc.) and capturing distributions for peak capacity, time to goal,
-    and total cost. You can expand or modify to include overhead or pricing variations.
-    """
     results = []
     progress_bar = st.progress(0)
     
     for i in range(n_simulations):
         perturbed = base_assumptions.copy()
         
-        # Example distributions for uncertain variables:
+        # Perturb certain assumptions
         perturbed['base_capacity'] = np.random.normal(
             base_assumptions['base_capacity'],
-            base_assumptions['base_capacity'] * 0.1  # ±10% variability
+            base_assumptions['base_capacity'] * 0.1
         )
         perturbed['ai_efficiency'] = np.random.triangular(
             left=0.1, mode=base_assumptions['ai_efficiency'], right=0.5
@@ -252,16 +250,14 @@ def run_monte_carlo(base_assumptions, n_simulations=500):
             base_assumptions['phase2_staff'] + 1
         ]))
         
-        # Generate timeline and check results
+        # Generate timeline and check if goal is met
         timeline = generate_timeline(perturbed)
-        goal_met = timeline[timeline['Monthly Capacity'] >= 1000]
+        goal_met = timeline[timeline['Monthly Capacity'] >= base_assumptions['samples_goal']]
         
         results.append({
             'peak_capacity': timeline['Monthly Capacity'].max(),
-            'months_to_goal': (
-                (goal_met.index[0] - timeline.index[0]).days // 30
-                if not goal_met.empty else None
-            ),
+            'months_to_goal': ((goal_met.index[0] - timeline.index[0]).days // 30)
+                              if not goal_met.empty else None,
             'total_cost': timeline['Total Cost'].sum() / 1e6
         })
         progress_bar.progress((i + 1) / n_simulations)
@@ -289,6 +285,7 @@ def render_monte_carlo(base_assumptions):
             st.plotly_chart(fig1, use_container_width=True)
         
         with col2:
+            # Only include simulations where the goal was reached
             fig2 = px.histogram(
                 results[~results['months_to_goal'].isna()],
                 x='months_to_goal',
@@ -303,25 +300,50 @@ def render_monte_carlo(base_assumptions):
             )
             st.plotly_chart(fig3, use_container_width=True)
         
-        # Probability of achieving goal at least once
-        success_rate = (1 - results['months_to_goal'].isna().mean()) * 100
-        st.metric("Probability of Achieving Goal", f"{success_rate:.1f}%")
+        # Calculate summary statistics for interpretation
+        avg_peak = results['peak_capacity'].mean()
+        median_peak = results['peak_capacity'].median()
+        std_peak = results['peak_capacity'].std()
         
-        # Interpretation Summary
-        st.markdown("""
-        **Monte Carlo Interpretation:**
+        # Calculate time-to-goal statistics only for simulations where goal was reached
+        valid_times = results[results['months_to_goal'].notna()]
+        if not valid_times.empty:
+            avg_time = valid_times['months_to_goal'].mean()
+            median_time = valid_times['months_to_goal'].median()
+        else:
+            avg_time = None
+            median_time = None
+        
+        # Calculate probability of reaching the sample goal (user-defined samples_goal)
+        probability_goal = (1 - results['months_to_goal'].isna().mean()) * 100
+        
+        # Display key metric for quick view
+        st.metric("Probability of Achieving Goal", f"{probability_goal:.1f}%")
+        
+        # Detailed contextual interpretation summary
+        st.markdown("### Monte Carlo Simulation Interpretation")
+        st.markdown(
+            f"**Peak Capacity Distribution:** The simulations indicate an average peak capacity of **{avg_peak:.1f} tests/month** "
+            f"(median: **{median_peak:.1f} tests/month**, standard deviation: **{std_peak:.1f}**). This shows the typical "
+            "throughput you might expect, as well as the degree of variability driven by uncertainties in staffing and operational parameters."
+        )
+        if avg_time is not None:
+            st.markdown(
+                f"**Time to Reach Goal:** Among the simulations where the lab meets the sample goal of **{base_assumptions['samples_goal']} samples/month**, "
+                f"the average time to achieve this milestone was **{avg_time:.1f} months** (median: **{median_time:.1f} months**). "
+                "This provides an estimate of how long it might take under favorable conditions, though some simulations show longer delays."
+            )
+        else:
+            st.markdown("**Time to Reach Goal:** In these simulations, the lab did not consistently reach the specified sample goal.")
+        st.markdown(
+            "**Cost vs Capacity Tradeoff:** The scatter plot illustrates that higher capacities tend to correlate with increased overall costs. "
+            "This tradeoff is critical when planning for scalability, as investing in higher capacity may lead to significantly higher expenditures."
+        )
+        st.markdown(
+            f"**Probability of Achieving Goal:** There is a **{probability_goal:.1f}%** chance that the lab will meet or exceed the target of "
+            f"**{base_assumptions['samples_goal']} samples/month** within the modeled timeframe."
+        )
 
-        - **Peak Capacity Distribution**: Shows how your maximum monthly capacity
-          can vary due to uncertainties in staffing, capacity, etc.
-        - **Time to Reach Goal**: The histogram indicates how quickly (in months)
-          you might reach 1,000 samples/month across simulations.
-        - **Cost vs Capacity**: Reveals if there's a correlation between higher
-          throughput and higher overall costs. A tight clustering suggests predictable
-          outcomes, whereas a wide spread indicates variability.
-        - **Probability of Achieving Goal**: This percentage shows how often the
-          lab is expected to hit the 1,000 samples/month milestone within the
-          modeled timeframe.
-        """)
 
 # -----------------------------------------------------------------------------
 # MAIN APP
