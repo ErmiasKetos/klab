@@ -4,7 +4,7 @@ import numpy as np
 import plotly.express as px
 from datetime import datetime
 
-# Use full window layout with expanded sidebar
+# Use full-window layout with an expanded sidebar
 st.set_page_config(layout="wide", initial_sidebar_state="expanded")
 
 if 'scenarios' not in st.session_state:
@@ -15,28 +15,24 @@ if 'scenarios' not in st.session_state:
 # -------------------------------------------------------------------
 def calculate_capacity(row, assumptions):
     base = assumptions['base_capacity']
-    # Calculate effective shift multiplier:
-    # If only one shift, all staff work; if more, only half the additional staff are available per extra shift.
+    # Effective shift multiplier: accounts for alternating shifts (only half the staff in extra shifts)
     effective_shift = 1 + (assumptions['shift_multiplier'] - 1) / 2
     if row['Phase'] == 'Phase 1':
-        # In Phase 1, assume one shift (all staff work full shift)
         return base * assumptions['phase1_staff']
     elif row['Phase'] == 'Phase 2':
-        # In Phase 2, capacity is increased by operating additional shifts but with split staffing
         return base * assumptions['phase2_staff'] * effective_shift
-    else:  # Phase 3
-        # In Phase 3, the lab also benefits from an AI efficiency boost
+    else:  # Phase 3 with AI boost
         return base * assumptions['phase3_staff'] * effective_shift * (1 + assumptions['ai_efficiency'])
 
 # -------------------------------------------------------------------
-# Input Assumptions: Including Test Mix, Operational Inputs, Goal Type, and Phase Dates
+# Input Assumptions: Including Test Mix, Operational Inputs, Production, Goals, and Phase Dates
 # -------------------------------------------------------------------
 def input_assumptions():
     with st.sidebar:
         st.header("Model Assumptions")
         # --- Analyst Work Parameters ---
         weekly_hours = 40  # hours per week
-        weeks_per_month = 4  # weeks per month
+        weeks_per_month = 4  # assume 4 weeks per month
         productivity = st.slider("Analyst Productivity Factor", 0.5, 1.0, 0.8)
         
         # --- Test Mix Assumptions ---
@@ -70,6 +66,13 @@ def input_assumptions():
             'avg_test_price': st.number_input("Average Test Price ($/sample)", 1, value=300),
         }
         
+        # --- Production Settings: Control Actual Processed Samples ---
+        st.subheader("Production Settings")
+        # This slider lets the user override or limit the actual processed samples per month.
+        # The effective processed samples will be the minimum of computed capacity and this value.
+        user_samples = st.slider("Desired Samples Processed per Month", 100, 10000, value=1000)
+        assumptions['user_samples'] = user_samples
+        
         # --- Goal Settings ---
         st.subheader("Goal Settings")
         goal_type = st.radio("Select Goal Type", ["Monthly Sample Goal", "Monthly Profit Goal"])
@@ -93,17 +96,24 @@ def input_assumptions():
 # Timeline Generation: Calculate Monthly Metrics and Determine Goal Achievement
 # -------------------------------------------------------------------
 def generate_timeline(assumptions):
-    dates = pd.date_range(start=assumptions['phase1_start'], end=assumptions['phase3_end'], freq='MS')
+    dates = pd.date_range(start=assumptions['phase1_start'],
+                          end=assumptions['phase3_end'],
+                          freq='MS')
     timeline = pd.DataFrame(index=dates)
     timeline.index.name = 'Month'
     
-    # Assign phases based on dates
+    # Assign phases
     timeline['Phase'] = 'Phase 1'
     timeline.loc[timeline.index >= assumptions['phase2_start'], 'Phase'] = 'Phase 2'
     timeline.loc[timeline.index >= assumptions['phase3_start'], 'Phase'] = 'Phase 3'
     
+    # Calculate theoretical monthly capacity based on inputs
     timeline['Monthly Capacity'] = timeline.apply(lambda x: calculate_capacity(x, assumptions), axis=1)
     timeline['Cumulative Samples'] = timeline['Monthly Capacity'].cumsum()
+    
+    # NEW: Calculate Processed Samples based on user control
+    # Actual processed samples is the minimum of computed capacity and user-defined value
+    timeline['Processed Samples'] = timeline['Monthly Capacity'].apply(lambda cap: min(cap, assumptions['user_samples']))
     
     # Calculate Costs
     timeline['Staff Costs'] = timeline['Phase'].map({
@@ -119,26 +129,32 @@ def generate_timeline(assumptions):
     timeline['Overhead Costs'] = overhead_base + overhead_base * qaqc_rate
     
     timeline['Total Cost'] = timeline['Staff Costs'] + timeline['Overhead Costs']
+    
+    # Revenue now based on processed samples (user-controlled)
     avg_test_price = assumptions.get('avg_test_price', 300)
-    timeline['Revenue'] = timeline['Monthly Capacity'] * avg_test_price
+    timeline['Revenue'] = timeline['Processed Samples'] * avg_test_price
+    
     timeline['Profit'] = timeline['Revenue'] - timeline['Total Cost']
     
-    # Determine if the goal is met based on selected goal type
+    # Determine "Goal Met?" based on selected goal type (using Processed Samples if sample goal)
     if assumptions['goal_type'] == "Monthly Sample Goal":
-        timeline['Goal Met?'] = timeline['Monthly Capacity'].apply(lambda x: "Goal Met" if x >= assumptions['goal_value'] else "Under Target")
+        timeline['Goal Met?'] = timeline['Processed Samples'].apply(lambda x: "Goal Met" if x >= assumptions['goal_value'] else "Under Target")
     else:
         timeline['Goal Met?'] = timeline['Profit'].apply(lambda x: "Goal Met" if x >= assumptions['goal_value'] else "Under Target")
     
     return timeline
 
 # -------------------------------------------------------------------
-# Render Base Visualizations: Capacity, Revenue, Profit, Data Table
+# Render Base Visualizations: Capacity, Revenue, Profit, Detailed Table
 # -------------------------------------------------------------------
 def render_base_visualizations(timeline):
     st.subheader("Monthly Capacity")
-    fig_cap = px.line(timeline.reset_index(), x='Month', y='Monthly Capacity', title="Monthly Capacity Over Time")
-    # Add horizontal goal line if using sample goal
+    fig_cap = px.line(timeline.reset_index(), x='Month', y='Monthly Capacity', title="Theoretical Monthly Capacity Over Time")
     st.plotly_chart(fig_cap, use_container_width=True)
+    
+    st.subheader("Processed Samples")
+    fig_proc = px.line(timeline.reset_index(), x='Month', y='Processed Samples', title="Actual Samples Processed (User-Controlled) Over Time")
+    st.plotly_chart(fig_proc, use_container_width=True)
     
     st.subheader("Monthly Revenue")
     fig_rev = px.line(timeline.reset_index(), x='Month', y='Revenue', title="Monthly Revenue Over Time")
@@ -149,7 +165,7 @@ def render_base_visualizations(timeline):
     st.plotly_chart(fig_profit, use_container_width=True)
     
     st.subheader("Detailed Data")
-    st.dataframe(timeline[["Phase", "Monthly Capacity", "Goal Met?", "Revenue", "Total Cost", "Profit"]])
+    st.dataframe(timeline[["Phase", "Monthly Capacity", "Processed Samples", "Goal Met?", "Revenue", "Total Cost", "Profit"]])
 
 # -------------------------------------------------------------------
 # Scenario Management: Save, Load, and Delete Scenarios
@@ -173,12 +189,11 @@ def scenario_management(assumptions):
         return selected
 
 # -------------------------------------------------------------------
-# Render Scenario Comparison & Expanded KPIs Dashboard
+# Render Scenario Comparison & KPI Dashboard
 # -------------------------------------------------------------------
 def render_comparison(selected_scenarios):
     if len(selected_scenarios) < 1:
         return
-
     all_data = []
     metrics = []
     for name in selected_scenarios:
@@ -189,7 +204,7 @@ def render_comparison(selected_scenarios):
         
         start_date = timeline.index[0]
         if scenario_assumptions['goal_type'] == "Monthly Sample Goal":
-            goal_achieved = timeline[timeline['Monthly Capacity'] >= scenario_assumptions['goal_value']]
+            goal_achieved = timeline[timeline['Processed Samples'] >= scenario_assumptions['goal_value']]
         else:
             goal_achieved = timeline[timeline['Profit'] >= scenario_assumptions['goal_value']]
         
@@ -214,6 +229,7 @@ def render_comparison(selected_scenarios):
         metrics.append({
             'Scenario': name,
             'Peak Capacity (tests/month)': timeline['Monthly Capacity'].max(),
+            'Peak Processed (tests/month)': timeline['Processed Samples'].max(),
             'Goal Achieved Date': goal_date_str,
             'Months to Reach Goal': months_to_goal,
             'Total Revenue ($M)': total_revenue / 1e6,
@@ -228,12 +244,11 @@ def render_comparison(selected_scenarios):
     df_combined = pd.concat(all_data)
     
     st.subheader("Scenario Comparison Chart")
-    # Use the goal type from the first selected scenario to add horizontal line
     first_scenario = st.session_state.scenarios[selected_scenarios[0]]
     goal_value = first_scenario.get('goal_value', 1000)
     if first_scenario['goal_type'] == "Monthly Sample Goal":
-        fig = px.line(df_combined.reset_index(), x='Month', y='Monthly Capacity', color='Scenario',
-                      title="Monthly Capacity Across Scenarios")
+        fig = px.line(df_combined.reset_index(), x='Month', y='Processed Samples', color='Scenario',
+                      title="Processed Samples Across Scenarios")
         fig.add_hline(y=goal_value, line_dash="dot", line_color="red")
     else:
         fig = px.line(df_combined.reset_index(), x='Month', y='Profit', color='Scenario',
@@ -252,16 +267,17 @@ def render_comparison(selected_scenarios):
     
     st.markdown("### KPI Explanations:")
     st.markdown("""
-    - **Peak Capacity (tests/month):** Maximum tests processed in any month.
-    - **Goal Achieved Date:** First month when capacity or profit meets/exceeds the set goal.
+    - **Peak Capacity (tests/month):** The maximum theoretical tests that could be processed in a month.
+    - **Peak Processed (tests/month):** The maximum number of samples actually processed (user-controlled) in a month.
+    - **Goal Achieved Date:** The first month when processed samples or profit meets/exceeds the set goal.
     - **Months to Reach Goal:** Number of months from start until the goal is achieved.
-    - **Total Revenue ($M):** Cumulative revenue over the period (in millions).
+    - **Total Revenue ($M):** Cumulative revenue over the period (in millions), calculated using actual processed samples.
     - **Total Cost ($M):** Cumulative cost over the period (in millions).
-    - **Total Profit ($M):** Revenue minus cost (in millions).
+    - **Total Profit ($M):** Total revenue minus total cost (in millions).
     - **Profit Margin (%):** Total profit as a percentage of total revenue.
     - **Avg Monthly Revenue ($K):** Average monthly revenue (in thousands).
     - **Avg Monthly Profit ($K):** Average monthly profit (in thousands).
-    - **Cost per Test ($):** Average cost per test performed.
+    - **Cost per Test ($):** Average cost incurred per test performed.
     """)
 
 # -------------------------------------------------------------------
@@ -286,7 +302,7 @@ def run_monte_carlo_simulation(base_assumptions, n_simulations=500):
         ]))
         timeline = generate_timeline(perturbed)
         if base_assumptions['goal_type'] == "Monthly Sample Goal":
-            goal_met = timeline[timeline['Monthly Capacity'] >= base_assumptions['goal_value']]
+            goal_met = timeline[timeline['Processed Samples'] >= base_assumptions['goal_value']]
         else:
             goal_met = timeline[timeline['Profit'] >= base_assumptions['goal_value']]
         results.append({
@@ -316,7 +332,7 @@ def render_monte_carlo(base_assumptions):
         with col3:
             fig3 = px.scatter(results, x='total_cost', y='peak_capacity', title="Cost vs Capacity Tradeoff")
             st.plotly_chart(fig3, use_container_width=True)
-        # Compute summary statistics for interpretation
+        # Summary statistics for interpretation
         avg_peak = results['peak_capacity'].mean()
         median_peak = results['peak_capacity'].median()
         std_peak = results['peak_capacity'].std()
@@ -332,7 +348,7 @@ def render_monte_carlo(base_assumptions):
         st.markdown("### Monte Carlo Simulation Interpretation")
         st.markdown(
             f"**Peak Capacity Distribution:** The simulations show an average peak capacity of **{avg_peak:.1f} tests/month** "
-            f"(median: **{median_peak:.1f}**, std: **{std_peak:.1f}**), reflecting variability in operations."
+            f"(median: **{median_peak:.1f}**, std: **{std_peak:.1f}**), reflecting variability in operational performance."
         )
         if avg_time is not None:
             st.markdown(
@@ -342,7 +358,7 @@ def render_monte_carlo(base_assumptions):
         else:
             st.markdown("**Time to Reach Goal:** The goal was not reached in most simulations.")
         st.markdown(
-            "**Cost vs Capacity Tradeoff:** Generally, higher capacity is associated with higher costs, a key tradeoff in scaling."
+            "**Cost vs Capacity Tradeoff:** Generally, higher capacity is associated with higher costs, highlighting a key tradeoff when scaling operations."
         )
         st.markdown(
             f"**Probability of Achieving Goal:** There is a **{probability_goal:.1f}%** chance of meeting the goal "
@@ -353,8 +369,12 @@ def render_monte_carlo(base_assumptions):
 # Main Application Structure
 # -------------------------------------------------------------------
 def main():
-    st.title("KELAB Scalability & Profitability Modeling")
+    st.title("Lab Scalability & Profitability Modeling Tool")
     st.markdown("""
+    This app models lab performance from **April 2025** to **December 2027**. 
+    Set your operational goals (either as a Monthly Sample Goal or Monthly Profit Goal) 
+    and control the actual samples processed per month via a slider. Adjust inputs on the sidebar 
+    to see how these changes impact capacity, revenue, profit, and risk analysis.
     """)
     
     assumptions = input_assumptions()
