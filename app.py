@@ -34,40 +34,42 @@ def generate_timeline(assumptions):
     timeline.loc[timeline.index >= assumptions['phase2_start'], 'Phase'] = 'Phase 2'
     timeline.loc[timeline.index >= assumptions['phase3_start'], 'Phase'] = 'Phase 3'
     
-    # Calculate monthly capacity
+    # Calculate Monthly Capacity & Cumulative Samples
     timeline['Monthly Capacity'] = timeline.apply(
         lambda x: calculate_capacity(x, assumptions), axis=1
     )
     timeline['Cumulative Samples'] = timeline['Monthly Capacity'].cumsum()
     
-    # Staff costs
+    # Staff Costs
     timeline['Staff Costs'] = timeline['Phase'].map({
         'Phase 1': assumptions['phase1_staff'] * assumptions['salary'],
         'Phase 2': assumptions['phase2_staff'] * assumptions['salary'],
         'Phase 3': assumptions['phase3_staff'] * assumptions['salary']
     })
     
-    # Overhead costs
-    overhead_base = (assumptions['equipment_lease'] +
-                     assumptions['instrument_running'] +
-                     assumptions['software_licenses'])
-    timeline['Overhead Costs'] = overhead_base + overhead_base * assumptions['qaqc_rate']
+    # Overhead Costs with default values if missing
+    equipment_lease = assumptions.get('equipment_lease', 10378)
+    instrument_running = assumptions.get('instrument_running', 2775)
+    software_licenses = assumptions.get('software_licenses', 2000)
+    qaqc_rate = assumptions.get('qaqc_rate', 0.08)
     
-    # Total cost
+    overhead_base = equipment_lease + instrument_running + software_licenses
+    timeline['Overhead Costs'] = overhead_base + overhead_base * qaqc_rate
+    
+    # Total Cost
     timeline['Total Cost'] = timeline['Staff Costs'] + timeline['Overhead Costs']
     
-    # Revenue
+    # Revenue & Profit
     timeline['Revenue'] = timeline['Monthly Capacity'] * assumptions['avg_test_price']
-    
-    # Profit
     timeline['Profit'] = timeline['Revenue'] - timeline['Total Cost']
     
-    # Goal tracking
+    # Goal Tracking
     timeline['Goal Met?'] = timeline['Monthly Capacity'].apply(
         lambda x: "Goal Met" if x >= 1000 else "Under Target"
     )
     
     return timeline
+
 
 def input_assumptions():
     with st.sidebar:
