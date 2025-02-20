@@ -326,12 +326,6 @@ def render_monte_carlo(base_assumptions):
 # -----------------------------------------------------------------------------
 def main():
     st.title("Lab Scalability Modeling Tool")
-    st.markdown(
-        """
-        This application models lab capacity, revenue, and profit from 
-        **April 2025** through **December 2027**, split into three phases.
-
-    )
     
     # Get user inputs and manage scenario state
     assumptions = input_assumptions()
