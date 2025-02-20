@@ -107,13 +107,15 @@ def generate_timeline(assumptions):
     timeline.loc[timeline.index >= assumptions['phase2_start'], 'Phase'] = 'Phase 2'
     timeline.loc[timeline.index >= assumptions['phase3_start'], 'Phase'] = 'Phase 3'
     
-    # Calculate theoretical monthly capacity based on inputs
+    # Calculate theoretical monthly capacity
     timeline['Monthly Capacity'] = timeline.apply(lambda x: calculate_capacity(x, assumptions), axis=1)
     timeline['Cumulative Samples'] = timeline['Monthly Capacity'].cumsum()
     
-    # NEW: Calculate Processed Samples based on user control
-    # Actual processed samples is the minimum of computed capacity and user-defined value
-    timeline['Processed Samples'] = timeline['Monthly Capacity'].apply(lambda cap: min(cap, assumptions['user_samples']))
+    # Calculate Processed Samples based on user-controlled production.
+    # Use the user_samples value if present; otherwise default to the computed capacity.
+    timeline['Processed Samples'] = timeline['Monthly Capacity'].apply(
+        lambda cap: min(cap, assumptions.get('user_samples', cap))
+    )
     
     # Calculate Costs
     timeline['Staff Costs'] = timeline['Phase'].map({
@@ -130,17 +132,21 @@ def generate_timeline(assumptions):
     
     timeline['Total Cost'] = timeline['Staff Costs'] + timeline['Overhead Costs']
     
-    # Revenue now based on processed samples (user-controlled)
+    # Revenue based on Processed Samples (user-controlled)
     avg_test_price = assumptions.get('avg_test_price', 300)
     timeline['Revenue'] = timeline['Processed Samples'] * avg_test_price
     
     timeline['Profit'] = timeline['Revenue'] - timeline['Total Cost']
     
-    # Determine "Goal Met?" based on selected goal type (using Processed Samples if sample goal)
+    # Determine "Goal Met?" based on selected goal type
     if assumptions['goal_type'] == "Monthly Sample Goal":
-        timeline['Goal Met?'] = timeline['Processed Samples'].apply(lambda x: "Goal Met" if x >= assumptions['goal_value'] else "Under Target")
+        timeline['Goal Met?'] = timeline['Processed Samples'].apply(
+            lambda x: "Goal Met" if x >= assumptions['goal_value'] else "Under Target"
+        )
     else:
-        timeline['Goal Met?'] = timeline['Profit'].apply(lambda x: "Goal Met" if x >= assumptions['goal_value'] else "Under Target")
+        timeline['Goal Met?'] = timeline['Profit'].apply(
+            lambda x: "Goal Met" if x >= assumptions['goal_value'] else "Under Target"
+        )
     
     return timeline
 
