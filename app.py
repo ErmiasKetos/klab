@@ -375,12 +375,10 @@ def render_monte_carlo(base_assumptions):
 # Main Application Structure
 # -------------------------------------------------------------------
 def main():
-    st.title("Lab Scalability & Profitability Modeling Tool")
+    st.title("KELAB Scalability & Profitability Modeling")
     st.markdown("""
     This app models lab performance from **April 2025** to **December 2027**. 
-    Set your operational goals (either as a Monthly Sample Goal or Monthly Profit Goal) 
-    and control the actual samples processed per month via a slider. Adjust inputs on the sidebar 
-    to see how these changes impact capacity, revenue, profit, and risk analysis.
+
     """)
     
     assumptions = input_assumptions()
