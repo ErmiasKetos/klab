@@ -72,13 +72,41 @@ def generate_timeline(assumptions):
     
     return timeline
 
-
 def input_assumptions():
     with st.sidebar:
         st.header("Model Assumptions")
         
+        # --- Analyst Work Parameters ---
+        weekly_hours = 40  # fixed assumption: 40 hours per week
+        weeks_per_month = 4  # assume 4 weeks per month for simplicity
+        productivity = st.slider("Analyst Productivity Factor (fraction of available hours)", 0.5, 1.0, 0.8)
+        
+        # --- Test Mix Assumptions ---
+        st.subheader("Test Mix Assumptions")
+        basic_pct = st.number_input("Percentage of Basic Metals tests (%)", min_value=0, max_value=100, value=50)
+        anions_pct = st.number_input("Percentage of Anions tests (%)", min_value=0, max_value=100, value=30)
+        advanced_pct = st.number_input("Percentage of Advanced Metals tests (%)", min_value=0, max_value=100, value=20)
+        
+        # Optional: Check if percentages add up to 100 (if not, warn the user)
+        total_pct = basic_pct + anions_pct + advanced_pct
+        if total_pct != 100:
+            st.warning("Test mix percentages should sum to 100%. Currently, they sum to {}%.".format(total_pct))
+        
+        # Compute weighted average test time (in hours)
+        # Basic Metals: 1 hr, Anions: 0.5 hr, Advanced Metals: 1.5 hr
+        weighted_test_time = (basic_pct/100.0)*1 + (anions_pct/100.0)*0.5 + (advanced_pct/100.0)*1.5
+        
+        # Compute available productive hours per month
+        available_hours = weekly_hours * weeks_per_month * productivity
+        
+        # Automatically computed base capacity per analyst per month
+        computed_base_capacity = available_hours / weighted_test_time
+        
+        st.markdown(f"**Computed Base Capacity/Analyst/Month:** {computed_base_capacity:.0f} samples")
+        
+        # Include the computed base capacity in the assumptions
         assumptions = {
-            'base_capacity': st.number_input("Base Capacity/Analyst/Month", 100, value=440),
+            'base_capacity': computed_base_capacity,
             'phase1_staff': st.number_input("Phase 1 Staff", 1, value=3),
             'phase2_staff': st.number_input("Phase 2 Staff", 1, value=5),
             'phase3_staff': st.number_input("Phase 3 Staff", 1, value=5),
@@ -90,7 +118,6 @@ def input_assumptions():
             'software_licenses': st.number_input("Software/Licenses ($/month)", 0, value=2000),
             'qaqc_rate': st.slider("QA/QC Rate (% of overhead)", 0.0, 0.2, 0.08),
             'avg_test_price': st.number_input("Average Test Price ($/sample)", 1, value=300),
-            # New input for sample/month goal:
             'samples_goal': st.number_input("Monthly Sample Goal", 100, 10000, value=1000)
         }
         
@@ -101,6 +128,7 @@ def input_assumptions():
         assumptions['phase3_end']   = pd.to_datetime(st.date_input("Model End Date", datetime(2027,12,31)))
         
         return assumptions
+
 
 
 def scenario_management(assumptions):
