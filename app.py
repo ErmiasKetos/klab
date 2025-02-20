@@ -8,15 +8,74 @@ from datetime import datetime
 if 'scenarios' not in st.session_state:
     st.session_state.scenarios = {}
 
-# --- Scenario Management Functions ---
-def save_scenario(assumptions, name):
-    st.session_state.scenarios[name] = assumptions
-    st.success(f"Scenario '{name}' saved!")
+# --- Helper Functions ---
+def calculate_capacity(row, assumptions):
+    if row['Phase'] == 'Phase 1':
+        return assumptions['base_capacity'] * assumptions['phase1_staff']
+    elif row['Phase'] == 'Phase 2':
+        return (assumptions['base_capacity'] * assumptions['phase2_staff'] 
+                * assumptions['shift_multiplier'])
+    elif row['Phase'] == 'Phase 3':
+        return (assumptions['base_capacity'] * assumptions['phase3_staff']
+                * assumptions['shift_multiplier'] 
+                * (1 + assumptions['ai_efficiency']))
 
-def delete_scenario(name):
-    del st.session_state.scenarios[name]
+# --- Model Logic ---
+def generate_timeline(assumptions):
+    dates = pd.date_range(
+        start=assumptions['phase1_start'],
+        end=assumptions['phase3_end'],
+        freq='MS'
+    )
+    
+    timeline = pd.DataFrame(index=dates)
+    timeline.index.name = 'Month'
+    
+    # Assign Phases
+    timeline['Phase'] = 'Phase 1'
+    timeline.loc[timeline.index >= assumptions['phase2_start'], 'Phase'] = 'Phase 2'
+    timeline.loc[timeline.index >= assumptions['phase3_start'], 'Phase'] = 'Phase 3'
+    
+    # Calculate Metrics
+    timeline['Monthly Capacity'] = timeline.apply(
+        lambda x: calculate_capacity(x, assumptions), axis=1)
+    timeline['Cumulative Samples'] = timeline['Monthly Capacity'].cumsum()
+    
+    # Calculate Costs
+    timeline['Staff Costs'] = timeline['Phase'].map({
+        'Phase 1': assumptions['phase1_staff'] * assumptions['salary'],
+        'Phase 2': assumptions['phase2_staff'] * assumptions['salary'],
+        'Phase 3': assumptions['phase3_staff'] * assumptions['salary']
+    })
+    
+    timeline['AI Costs'] = (timeline['Phase'] == 'Phase 3') * assumptions['ai_cost']
+    
+    return timeline
 
-# --- Enhanced UI Components ---
+# --- UI Components ---
+def input_assumptions():
+    with st.sidebar:
+        st.header("Model Assumptions")
+        
+        assumptions = {
+            'base_capacity': st.number_input("Base Capacity/Analyst/Month", 100),
+            'phase1_staff': st.number_input("Phase 1 Staff", 3),
+            'phase2_staff': st.number_input("Phase 2 Staff", 5),
+            'phase3_staff': st.number_input("Phase 3 Staff", 5),
+            'shift_multiplier': st.slider("Shift Multiplier (Phase 2+)", 1.0, 3.0, 2.0),
+            'ai_efficiency': st.slider("AI Efficiency Boost", 0.0, 1.0, 0.3),
+            'salary': st.number_input("Monthly Salary/Analyst ($)", 5000),
+            'ai_cost': st.number_input("AI Setup Cost ($)", 50000)
+        }
+        
+        st.subheader("Phase Dates")
+        assumptions['phase1_start'] = st.date_input("Phase 1 Start", datetime(2025,1,1))
+        assumptions['phase2_start'] = st.date_input("Phase 2 Start", datetime(2026,1,1))
+        assumptions['phase3_start'] = st.date_input("Phase 3 Start", datetime(2027,1,1))
+        assumptions['phase3_end'] = st.date_input("Model End Date", datetime(2027,12,31))
+        
+        return assumptions
+
 def scenario_management(assumptions):
     with st.sidebar:
         st.subheader("Scenario Management")
@@ -44,7 +103,13 @@ def scenario_management(assumptions):
         
         return selected
 
-# --- Scenario Comparison Visualizations ---
+def save_scenario(assumptions, name):
+    st.session_state.scenarios[name] = assumptions
+    st.success(f"Scenario '{name}' saved!")
+
+def delete_scenario(name):
+    del st.session_state.scenarios[name]
+
 def render_comparison(selected_scenarios):
     if len(selected_scenarios) < 1:
         return
@@ -79,7 +144,6 @@ def render_comparison(selected_scenarios):
     
     st.dataframe(pd.DataFrame(metrics), use_container_width=True)
 
-# --- Monte Carlo Functions ---
 def run_monte_carlo(base_assumptions, n_simulations=500):
     results = []
     progress_bar = st.progress(0)
@@ -114,7 +178,6 @@ def run_monte_carlo(base_assumptions, n_simulations=500):
     
     return pd.DataFrame(results)
 
-# --- Monte Carlo UI ---
 def render_monte_carlo(base_assumptions):
     st.subheader("Risk Analysis (Monte Carlo Simulation)")
     
@@ -148,6 +211,7 @@ def render_monte_carlo(base_assumptions):
         # Risk Metrics
         success_rate = (1 - results['months_to_goal'].isna().mean()) * 100
         st.metric("Probability of Achieving Goal", f"{success_rate:.1f}%")
+
 def main():
     st.title("Lab Scalability Modeling Tool")
     
