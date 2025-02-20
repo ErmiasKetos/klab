@@ -4,18 +4,10 @@ import numpy as np
 import plotly.express as px
 from datetime import datetime
 
-# Initialize session state for scenario management
 if 'scenarios' not in st.session_state:
     st.session_state.scenarios = {}
 
-# -----------------------------------------------------------------------------
-# HELPER FUNCTIONS
-# -----------------------------------------------------------------------------
 def calculate_capacity(row, assumptions):
-    """
-    Calculate monthly capacity for a given month based on the phase.
-    Incorporates shift multiplier and optional AI efficiency for Phase 3.
-    """
     base = assumptions['base_capacity']
     if row['Phase'] == 'Phase 1':
         return base * assumptions['phase1_staff']
@@ -27,11 +19,6 @@ def calculate_capacity(row, assumptions):
                 (1 + assumptions['ai_efficiency']))
 
 def generate_timeline(assumptions):
-    """
-    Builds a monthly timeline from the user-specified Phase 1 start
-    to the Phase 3 end date. Assigns phases, calculates capacity,
-    then derives overhead costs, revenue, total costs, profit, etc.
-    """
     # Create monthly date range
     dates = pd.date_range(
         start=assumptions['phase1_start'],
@@ -42,59 +29,51 @@ def generate_timeline(assumptions):
     timeline = pd.DataFrame(index=dates)
     timeline.index.name = 'Month'
     
-    # Assign phases based on input phase dates
+    # Assign phases
     timeline['Phase'] = 'Phase 1'
     timeline.loc[timeline.index >= assumptions['phase2_start'], 'Phase'] = 'Phase 2'
     timeline.loc[timeline.index >= assumptions['phase3_start'], 'Phase'] = 'Phase 3'
     
-    # Calculate Monthly Capacity & Cumulative
+    # Calculate monthly capacity
     timeline['Monthly Capacity'] = timeline.apply(
         lambda x: calculate_capacity(x, assumptions), axis=1
     )
     timeline['Cumulative Samples'] = timeline['Monthly Capacity'].cumsum()
     
-    # Staff Costs (scales with staff count in each phase)
+    # Staff costs
     timeline['Staff Costs'] = timeline['Phase'].map({
         'Phase 1': assumptions['phase1_staff'] * assumptions['salary'],
         'Phase 2': assumptions['phase2_staff'] * assumptions['salary'],
         'Phase 3': assumptions['phase3_staff'] * assumptions['salary']
     })
     
-    # Overhead Costs (fixed monthly + QA/QC rate on that overhead)
-    # Example approach: sum equipment, instrument, software => overhead_base
-    # Then QA/QC is overhead_base * qaqc_rate
+    # Overhead costs
     overhead_base = (assumptions['equipment_lease'] +
                      assumptions['instrument_running'] +
                      assumptions['software_licenses'])
     timeline['Overhead Costs'] = overhead_base + overhead_base * assumptions['qaqc_rate']
     
-    # Total Cost = Staff + Overhead
+    # Total cost
     timeline['Total Cost'] = timeline['Staff Costs'] + timeline['Overhead Costs']
     
-    # Revenue (simple approach: capacity * average test price)
+    # Revenue
     timeline['Revenue'] = timeline['Monthly Capacity'] * assumptions['avg_test_price']
     
-    # Profit = Revenue - Total Cost
+    # Profit
     timeline['Profit'] = timeline['Revenue'] - timeline['Total Cost']
     
-    # Goal Tracking
+    # Goal tracking
     timeline['Goal Met?'] = timeline['Monthly Capacity'].apply(
         lambda x: "Goal Met" if x >= 1000 else "Under Target"
     )
     
     return timeline
 
-# -----------------------------------------------------------------------------
-# UI COMPONENTS
-# -----------------------------------------------------------------------------
 def input_assumptions():
-    """Gather all model assumptions via Streamlit sidebar."""
     with st.sidebar:
         st.header("Model Assumptions")
         
-        # Dynamic Input Controls
         assumptions = {
-            # Capacity & Staff
             'base_capacity': st.number_input("Base Capacity/Analyst/Month", 100, value=440),
             'phase1_staff': st.number_input("Phase 1 Staff", 1, value=3),
             'phase2_staff': st.number_input("Phase 2 Staff", 1, value=5),
@@ -102,22 +81,20 @@ def input_assumptions():
             'shift_multiplier': st.slider("Shift Multiplier (Phase 2+)", 1.0, 3.0, 2.0),
             'ai_efficiency': st.slider("AI Efficiency Boost (Phase 3)", 0.0, 1.0, 0.3),
             
-            # Costs
             'salary': st.number_input("Monthly Salary/Analyst ($)", 1000, value=5000),
             'equipment_lease': st.number_input("Equipment Lease ($/month)", 0, value=10378),
             'instrument_running': st.number_input("Instrument Running ($/month)", 0, value=2775),
             'software_licenses': st.number_input("Software/Licenses ($/month)", 0, value=2000),
             'qaqc_rate': st.slider("QA/QC Rate (% of overhead)", 0.0, 0.2, 0.08),
-            
-            # Pricing
             'avg_test_price': st.number_input("Average Test Price ($/sample)", 1, value=300),
         }
         
         st.subheader("Phase Dates")
-        assumptions['phase1_start'] = st.date_input("Phase 1 Start", datetime(2025,4,1))
-        assumptions['phase2_start'] = st.date_input("Phase 2 Start", datetime(2026,1,1))
-        assumptions['phase3_start'] = st.date_input("Phase 3 Start", datetime(2027,1,1))
-        assumptions['phase3_end'] = st.date_input("Model End Date", datetime(2027,12,31))
+        # Convert date_input() (Python date) -> pandas Timestamp
+        assumptions['phase1_start'] = pd.to_datetime(st.date_input("Phase 1 Start", datetime(2025,4,1)))
+        assumptions['phase2_start'] = pd.to_datetime(st.date_input("Phase 2 Start", datetime(2026,1,1)))
+        assumptions['phase3_start'] = pd.to_datetime(st.date_input("Phase 3 Start", datetime(2027,1,1)))
+        assumptions['phase3_end']   = pd.to_datetime(st.date_input("Model End Date", datetime(2027,12,31)))
         
         return assumptions
 
@@ -353,24 +330,7 @@ def main():
         """
         This application models lab capacity, revenue, and profit from 
         **April 2025** through **December 2027**, split into three phases.
-        
-        **Key Features**:
-        - **Dynamic Input Controls**: Adjust staff, capacity, shift expansion, 
-          test pricing, and fixed costs in real time.
-        - **Timeline & Phase Modeling**: Automatically categorizes each month 
-          into Phase 1 (2025), Phase 2 (2026), or Phase 3 (2027+) with different 
-          capacity multipliers.
-        - **Capacity, Revenue & Profit**: Computes monthly throughput, revenue 
-          (based on test pricing), total costs, and profit.
-        - **Goal Tracking**: Checks whether the lab meets a 1,000 samples/month 
-          target, showing “Goal Met” or “Under Target.”
-        - **Interactive Visualizations**: Plotly charts for capacity, revenue, 
-          and profit over time.
-        - **Scenario Comparison**: Save multiple scenarios (e.g., Conservative, 
-          Moderate, Optimistic) and compare results side-by-side.
-        - **Monte Carlo Simulation**: Run risk analysis to see how uncertainties 
-          in key assumptions might impact capacity, costs, and goal achievement.
-        """
+
     )
     
     # Get user inputs and manage scenario state
