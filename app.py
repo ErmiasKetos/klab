@@ -4,6 +4,9 @@ import numpy as np
 import plotly.express as px
 from datetime import datetime
 
+st.set_page_config(layout="wide", initial_sidebar_state="expanded")
+
+
 if 'scenarios' not in st.session_state:
     st.session_state.scenarios = {}
 
