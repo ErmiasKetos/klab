@@ -204,55 +204,88 @@ def render_comparison(selected_scenarios):
         return
     
     all_data = []
+    metrics = []
     for name in selected_scenarios:
-        timeline = generate_timeline(st.session_state.scenarios[name])
+        # Retrieve the saved assumptions for this scenario
+        scenario_assumptions = st.session_state.scenarios[name]
+        timeline = generate_timeline(scenario_assumptions)
         timeline['Scenario'] = name
         all_data.append(timeline)
+        
+        # Identify the first month where capacity >= user-defined sample goal
+        goal_threshold = scenario_assumptions.get('samples_goal', 1000)
+        goal_achieved = timeline[timeline['Monthly Capacity'] >= goal_threshold]
+        
+        start_date = timeline.index[0]
+        if not goal_achieved.empty:
+            goal_date = goal_achieved.index[0]
+            months_to_goal = (goal_date.year - start_date.year) * 12 + (goal_date.month - start_date.month)
+            goal_date_str = goal_date.strftime("%Y-%m-%d")
+        else:
+            goal_date_str = "Not Reached"
+            months_to_goal = "Not Reached"
+        
+        total_months = len(timeline)
+        total_revenue = timeline['Revenue'].sum()
+        total_cost = timeline['Total Cost'].sum()
+        total_profit = timeline['Profit'].sum()
+        profit_margin = (total_profit / total_revenue * 100) if total_revenue else 0
+        avg_monthly_revenue = total_revenue / total_months
+        avg_monthly_profit = total_profit / total_months
+        total_samples = timeline['Cumulative Samples'].iloc[-1]
+        cost_per_test = total_cost / total_samples if total_samples > 0 else None
+        
+        metrics.append({
+            'Scenario': name,
+            'Peak Capacity (tests/month)': timeline['Monthly Capacity'].max(),
+            'Goal Achieved Date': goal_date_str,
+            'Months to Reach Goal': months_to_goal,
+            'Total Revenue ($M)': total_revenue / 1e6,
+            'Total Cost ($M)': total_cost / 1e6,
+            'Total Profit ($M)': total_profit / 1e6,
+            'Profit Margin (%)': profit_margin,
+            'Avg Monthly Revenue ($K)': avg_monthly_revenue / 1e3,
+            'Avg Monthly Profit ($K)': avg_monthly_profit / 1e3,
+            'Cost per Test ($)': cost_per_test
+        })
     
-    combined = pd.concat(all_data)
+    df_combined = pd.concat(all_data)
     
-    # Capacity Comparison
     st.subheader("Scenario Comparison - Capacity")
+    # Assume the sample goal is consistent across scenarios; using the goal from the first scenario
+    sample_goal = st.session_state.scenarios[selected_scenarios[0]].get('samples_goal', 1000)
     fig_cap = px.line(
-        combined.reset_index(), x='Month', y='Monthly Capacity',
+        df_combined.reset_index(), x='Month', y='Monthly Capacity',
         color='Scenario', title="Monthly Capacity Across Scenarios"
     )
-    fig_cap.add_hline(y=1000, line_dash="dot", line_color="red")
+    fig_cap.add_hline(y=sample_goal, line_dash="dot", line_color="red")
     st.plotly_chart(fig_cap, use_container_width=True)
     
-    # Revenue Comparison
-    st.subheader("Scenario Comparison - Revenue")
-    fig_rev = px.line(
-        combined.reset_index(), x='Month', y='Revenue',
-        color='Scenario', title="Monthly Revenue Across Scenarios"
-    )
-    st.plotly_chart(fig_rev, use_container_width=True)
-    
-    # Profit Comparison
     st.subheader("Scenario Comparison - Profit")
     fig_profit = px.line(
-        combined.reset_index(), x='Month', y='Profit',
+        df_combined.reset_index(), x='Month', y='Profit',
         color='Scenario', title="Monthly Profit Across Scenarios"
     )
     st.plotly_chart(fig_profit, use_container_width=True)
     
-    # Metrics Table
-    st.subheader("Key Metrics")
-    metrics = []
-    for name in selected_scenarios:
-        tl = generate_timeline(st.session_state.scenarios[name])
-        # Identify the first month where capacity >= 1000
-        goal_achieved = tl[tl['Monthly Capacity'] >= 1000]
-        metrics.append({
-            'Scenario': name,
-            'Peak Capacity': tl['Monthly Capacity'].max(),
-            'Total Revenue ($M)': tl['Revenue'].sum() / 1e6,
-            'Total Cost ($M)': tl['Total Cost'].sum() / 1e6,
-            'Total Profit ($M)': tl['Profit'].sum() / 1e6,
-            'Goal Achieved Date': goal_achieved.index[0] if not goal_achieved.empty else "Not Reached"
-        })
+    st.subheader("Key Metrics (KPIs)")
+    df_metrics = pd.DataFrame(metrics)
+    st.dataframe(df_metrics, use_container_width=True)
     
-    st.dataframe(pd.DataFrame(metrics), use_container_width=True)
+    st.markdown("### KPI Explanations:")
+    st.markdown("""
+    - **Peak Capacity (tests/month):** The highest number of tests processed in any single month, reflecting maximum throughput.
+    - **Goal Achieved Date:** The first month when the lab’s capacity meets or exceeds the user-defined sample goal.
+    - **Months to Reach Goal:** The number of months taken from the start of operations until the sample goal is reached.
+    - **Total Revenue ($M):** The sum of monthly revenues over the model period, expressed in millions.
+    - **Total Cost ($M):** The sum of all monthly costs (staff and overhead) over the model period, expressed in millions.
+    - **Total Profit ($M):** The difference between total revenue and total cost, expressed in millions.
+    - **Profit Margin (%):** The ratio of total profit to total revenue, showing profitability as a percentage.
+    - **Avg Monthly Revenue ($K):** The average revenue per month, expressed in thousands of dollars.
+    - **Avg Monthly Profit ($K):** The average profit per month, expressed in thousands of dollars.
+    - **Cost per Test ($):** The average cost incurred for each test performed, calculated by dividing total cost by total tests completed.
+    """)
+
 
 # -----------------------------------------------------------------------------
 # MONTE CARLO SIMULATION
