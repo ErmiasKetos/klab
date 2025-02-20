@@ -69,10 +69,10 @@ def input_assumptions():
         }
         
         st.subheader("Phase Dates")
-        assumptions['phase1_start'] = st.date_input("Phase 1 Start", datetime(2025,1,1))
-        assumptions['phase2_start'] = st.date_input("Phase 2 Start", datetime(2026,1,1))
-        assumptions['phase3_start'] = st.date_input("Phase 3 Start", datetime(2027,1,1))
-        assumptions['phase3_end'] = st.date_input("Model End Date", datetime(2027,12,31))
+        assumptions['phase1_start'] = pd.to_datetime(st.date_input("Phase 1 Start", datetime(2025,1,1)))
+        assumptions['phase2_start'] = pd.to_datetime(st.date_input("Phase 2 Start", datetime(2026,1,1)))
+        assumptions['phase3_start'] = pd.to_datetime(st.date_input("Phase 3 Start", datetime(2027,1,1)))
+        assumptions['phase3_end'] = pd.to_datetime(st.date_input("Model End Date", datetime(2027,12,31)))
         
         return assumptions
 
