@@ -71,9 +71,10 @@ with st.sidebar.expander("3) Test Pricing & TAT Multipliers"):
     test_data = {}
     for test_name, info in test_info.items():
         st.markdown(f"**{test_name}**")
+        # Convert default base price to float so that value and step are the same type
         base_price = st.number_input(
             f"{test_name} - Base Price",
-            value=info["base_price"],
+            value=float(info["base_price"]),
             step=50.0,
             key=f"{test_name}_price"
         )
