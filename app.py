@@ -198,6 +198,16 @@ def scenario_management(assumptions):
 # Render Scenario Comparison & KPI Dashboard
 # -------------------------------------------------------------------
 def render_comparison(selected_scenarios):
+    # Filter out any scenario names that no longer exist in session state
+    valid_scenarios = [name for name in selected_scenarios if name in st.session_state.scenarios]
+    if len(valid_scenarios) < 1:
+        return
+    
+    all_data = []
+    metrics = []
+    for name in valid_scenarios:
+        scenario_assumptions = st.session_state.scenarios[name]
+
     if len(selected_scenarios) < 1:
         return
     all_data = []
