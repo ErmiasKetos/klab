@@ -6,6 +6,8 @@ from datetime import datetime
 import io
 from pptx import Presentation
 from pptx.util import Inches, Pt
+from pptx.enum.shapes import MSO_SHAPE
+from pptx.dml.color import RGBColor
 
 # Set full-window layout with expanded sidebar
 st.set_page_config(layout="wide", initial_sidebar_state="expanded")
@@ -19,7 +21,7 @@ if 'scenarios' not in st.session_state:
 # -------------------------------------------------------------------
 def calculate_capacity(row, assumptions):
     base = assumptions['base_capacity']
-    # Effective shift multiplier: additional shifts get half the staffing
+    # Effective shift multiplier: additional shifts have half the staffing per extra shift
     effective_shift = 1 + (assumptions['shift_multiplier'] - 1) / 2
     if row['Phase'] == 'Phase 1':
         return base * assumptions['phase1_staff']
@@ -47,7 +49,6 @@ def input_assumptions():
         total_pct = basic_pct + anions_pct + advanced_pct
         if total_pct != 100:
             st.warning(f"Test mix percentages sum to {total_pct}%. They should total 100%.")
-        # Weighted average test time (in hours per sample)
         weighted_test_time = (basic_pct/100.0)*1 + (anions_pct/100.0)*0.5 + (advanced_pct/100.0)*1.5
         available_hours = weekly_hours * weeks_per_month * productivity
         computed_base_capacity = available_hours / weighted_test_time
@@ -75,7 +76,7 @@ def input_assumptions():
         user_samples = st.slider("Desired Samples Processed per Month", 100, 10000, value=1000)
         assumptions['user_samples'] = user_samples
         
-        # Goal Settings: Option to set goal as Monthly Sample Goal or Monthly Profit Goal
+        # Goal Settings: Option for Monthly Sample or Profit Goal
         st.subheader("Goal Settings")
         goal_type = st.radio("Select Goal Type", ["Monthly Sample Goal", "Monthly Profit Goal"])
         if goal_type == "Monthly Sample Goal":
@@ -90,12 +91,12 @@ def input_assumptions():
         assumptions['phase1_start'] = pd.to_datetime(st.date_input("Phase 1 Start", datetime(2025, 4, 1)))
         assumptions['phase2_start'] = pd.to_datetime(st.date_input("Phase 2 Start", datetime(2026, 1, 1)))
         assumptions['phase3_start'] = pd.to_datetime(st.date_input("Phase 3 Start", datetime(2027, 1, 1)))
-        assumptions['phase3_end'] = pd.to_datetime(st.date_input("Model End Date", datetime(2027, 12, 31)))
+        assumptions['phase3_end']   = pd.to_datetime(st.date_input("Model End Date", datetime(2027, 12, 31)))
         
         return assumptions
 
 # -------------------------------------------------------------------
-# Timeline Generation: Calculate Monthly Metrics and Determine Goal Achievement
+# Timeline Generation: Calculate Monthly Metrics and Goal Achievement
 # -------------------------------------------------------------------
 def generate_timeline(assumptions):
     dates = pd.date_range(start=assumptions['phase1_start'],
@@ -104,7 +105,7 @@ def generate_timeline(assumptions):
     timeline = pd.DataFrame(index=dates)
     timeline.index.name = 'Month'
     
-    # Assign phases based on dates
+    # Assign Phases
     timeline['Phase'] = 'Phase 1'
     timeline.loc[timeline.index >= assumptions['phase2_start'], 'Phase'] = 'Phase 2'
     timeline.loc[timeline.index >= assumptions['phase3_start'], 'Phase'] = 'Phase 3'
@@ -113,12 +114,12 @@ def generate_timeline(assumptions):
     timeline['Monthly Capacity'] = timeline.apply(lambda x: calculate_capacity(x, assumptions), axis=1)
     timeline['Cumulative Samples'] = timeline['Monthly Capacity'].cumsum()
     
-    # Processed Samples based on user-controlled production (min of computed capacity and user input)
+    # Processed Samples: Minimum of computed capacity and user-controlled production
     timeline['Processed Samples'] = timeline['Monthly Capacity'].apply(
         lambda cap: min(cap, assumptions.get('user_samples', cap))
     )
     
-    # Costs Calculations
+    # Cost Calculations
     timeline['Staff Costs'] = timeline['Phase'].map({
         'Phase 1': assumptions['phase1_staff'] * assumptions['salary'],
         'Phase 2': assumptions['phase2_staff'] * assumptions['salary'],
@@ -137,7 +138,7 @@ def generate_timeline(assumptions):
     timeline['Revenue'] = timeline['Processed Samples'] * avg_test_price
     timeline['Profit'] = timeline['Revenue'] - timeline['Total Cost']
     
-    # Goal Met Determination based on selected goal type
+    # Determine "Goal Met?" based on selected goal type
     if assumptions['goal_type'] == "Monthly Sample Goal":
         timeline['Goal Met?'] = timeline['Processed Samples'].apply(
             lambda x: "Goal Met" if x >= assumptions['goal_value'] else "Under Target"
@@ -150,7 +151,7 @@ def generate_timeline(assumptions):
     return timeline
 
 # -------------------------------------------------------------------
-# Render Base Visualizations: Capacity, Processed Samples, Revenue, Profit, Detailed Data
+# Render Base Visualizations: Graphs and Detailed Data Table
 # -------------------------------------------------------------------
 def render_base_visualizations(timeline):
     st.subheader("Monthly Capacity")
@@ -195,52 +196,76 @@ def scenario_management(assumptions):
         return selected
 
 # -------------------------------------------------------------------
-# Generate PPT for Current Scenario (with graphs, assumptions, and data)
+# Generate PPT for Current Scenario (Beautiful and Professional)
 # -------------------------------------------------------------------
 def generate_ppt(assumptions, timeline):
     prs = Presentation()
     
+    # Helper: Add a border to a slide
+    def add_border(slide):
+        left = Inches(0.2)
+        top = Inches(0.2)
+        width = prs.slide_width - Inches(0.4)
+        height = prs.slide_height - Inches(0.4)
+        border = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, left, top, width, height)
+        border.fill.solid()
+        border.fill.fore_color.rgb = RGBColor(255, 255, 255)  # white fill
+        border.line.color.rgb = RGBColor(0, 51, 102)  # deep blue
+        border.line.width = Pt(3)
+        # Send border to back
+        border._element.getparent().insert(0, border._element)
+    
     # Title Slide
     title_slide_layout = prs.slide_layouts[0]
     slide = prs.slides.add_slide(title_slide_layout)
+    add_border(slide)
     slide.shapes.title.text = "Current Scenario: Lab Scalability & Profitability"
     slide.placeholders[1].text = f"Generated on {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
     
-    # Assumptions Slide
+    # Assumptions Slide with Card Effect
     blank_slide_layout = prs.slide_layouts[5]
     slide = prs.slides.add_slide(blank_slide_layout)
-    txBox = slide.shapes.add_textbox(Inches(0.5), Inches(0.5), Inches(9), Inches(5))
+    add_border(slide)
+    # Create a card (rounded rectangle)
+    card_left = Inches(0.5)
+    card_top = Inches(0.5)
+    card_width = prs.slide_width - Inches(1)
+    card_height = prs.slide_height - Inches(1)
+    card = slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, card_left, card_top, card_width, card_height)
+    card.fill.solid()
+    card.fill.fore_color.rgb = RGBColor(240, 240, 240)  # light grey
+    card.line.color.rgb = RGBColor(0, 51, 102)
+    card.line.width = Pt(2)
+    # Add assumptions text on top of card
+    txBox = slide.shapes.add_textbox(Inches(0.7), Inches(0.7), Inches(8.6), Inches(6))
     tf = txBox.text_frame
     tf.text = "Model Assumptions:\n"
     for key, value in assumptions.items():
         tf.text += f"{key}: {value}\n"
     
-    # Generate figures for PPT
-    fig_capacity = px.line(timeline.reset_index(), x='Month', y='Monthly Capacity', title="Theoretical Monthly Capacity")
-    fig_processed = px.line(timeline.reset_index(), x='Month', y='Processed Samples', title="Processed Samples")
-    fig_revenue = px.line(timeline.reset_index(), x='Month', y='Revenue', title="Monthly Revenue")
-    fig_profit = px.line(timeline.reset_index(), x='Month', y='Profit', title="Monthly Profit")
-    
+    # Create a slide for each graph
     figures = [
-        ("Theoretical Monthly Capacity", fig_capacity),
-        ("Processed Samples", fig_processed),
-        ("Monthly Revenue", fig_revenue),
-        ("Monthly Profit", fig_profit)
+        ("Theoretical Monthly Capacity", px.line(timeline.reset_index(), x='Month', y='Monthly Capacity', title="Theoretical Monthly Capacity")),
+        ("Processed Samples", px.line(timeline.reset_index(), x='Month', y='Processed Samples', title="Processed Samples")),
+        ("Monthly Revenue", px.line(timeline.reset_index(), x='Month', y='Revenue', title="Monthly Revenue")),
+        ("Monthly Profit", px.line(timeline.reset_index(), x='Month', y='Profit', title="Monthly Profit"))
     ]
     
-    # Add a slide per figure
     for title_text, fig in figures:
         slide = prs.slides.add_slide(blank_slide_layout)
+        add_border(slide)
+        # Add slide title
         txBox = slide.shapes.add_textbox(Inches(0.5), Inches(0.2), Inches(9), Inches(0.8))
         tf = txBox.text_frame
         tf.text = title_text
-        # Export figure to image (requires kaleido)
+        # Export Plotly figure as PNG (requires kaleido)
         img_bytes = fig.to_image(format="png")
         image_stream = io.BytesIO(img_bytes)
         slide.shapes.add_picture(image_stream, Inches(1), Inches(1.2), width=Inches(8))
     
     # Detailed Data Slide (first 10 rows)
     slide = prs.slides.add_slide(blank_slide_layout)
+    add_border(slide)
     txBox = slide.shapes.add_textbox(Inches(0.5), Inches(0.5), Inches(9), Inches(5))
     tf = txBox.text_frame
     tf.text = "Detailed Data (first 10 rows):\n"
@@ -345,7 +370,7 @@ def render_comparison(selected_scenarios):
     - **Avg Monthly Profit ($K):** Average monthly profit (in thousands).
     - **Cost per Test ($):** Average cost incurred per test performed.
     """)
-
+    
 # -------------------------------------------------------------------
 # Monte Carlo Simulation & Interpretation
 # -------------------------------------------------------------------
@@ -398,7 +423,6 @@ def render_monte_carlo(base_assumptions):
         with col3:
             fig3 = px.scatter(results, x='total_cost', y='peak_capacity', title="Cost vs Capacity Tradeoff")
             st.plotly_chart(fig3, use_container_width=True)
-        # Summary statistics
         avg_peak = results['peak_capacity'].mean()
         median_peak = results['peak_capacity'].median()
         std_peak = results['peak_capacity'].std()
@@ -435,11 +459,11 @@ def render_monte_carlo(base_assumptions):
 # Main Application Structure
 # -------------------------------------------------------------------
 def main():
-    st.title("KELP Scalability & Profitability Modeling")
+    st.title("KELAB Scalability & Profitability Modeling")
     st.markdown("""
     This app models lab performance from **April 2025** to **December 2027**.
     Set your operational goals (either as a Monthly Sample Goal or Monthly Profit Goal) and adjust production via the slider.
-    You can also generate a downloadable PPT file for the Current Scenario (including graphs, used assumptions, and data).
+    You can also generate a downloadable PPT file for the Current Scenario (including graphs, assumptions, and detailed data).
     """)
     
     assumptions = input_assumptions()
